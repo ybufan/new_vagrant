@@ -30,7 +30,7 @@ Vagrant.configure("2") do |config|
   # via 127.0.0.1 to disable public access
   
   # For Cockpit
-  config.vm.network "forwarded_port", guest: 9090, host: 19090, host_ip: "127.0.0.1"
+  config.vm.network "forwarded_port", guest: 9090, host: 29090, host_ip: "127.0.0.1"
   
   # For SMTP
   config.vm.network "forwarded_port", guest: 25, host: 1025
@@ -46,6 +46,12 @@ Vagrant.configure("2") do |config|
   
   #for Apache
   config.vm.network "forwarded_port", guest: 80, host: 8080
+  
+  # dnsauth 
+  config.vm.network "forwarded_port", guest: 54, host: 154, host_ip: "127.0.0.1"
+  
+  # dnsrecurs
+  config.vm.network "forwarded_port", guest: 53, host: 153, host_ip: "127.0.0.1"
 
   # Create a private network, which allows host-only access to the machine
   # using a specific IP.
@@ -78,26 +84,132 @@ Vagrant.configure("2") do |config|
   # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
   # documentation for more information about their specific syntax and use.
    config.vm.provision "shell", inline: <<-SHELL
-     # Installation block
-	
+      Installation block
      yum -y install epel-release
      yum -y install vim cockpit bash-completion postfix dovecot telnet nc
      yum -y install cyrus-sasl cyrus-sasl-plain
      yum -y install pdns pdns-recursor
      yum -y install bind-utils
-	 yum -y install httpd 
-	 yum -y install mysql-server mysql 
-	 yum -y install php-fpm.x86_64 
+  	 # Service configuration block
+     systemctl enable --now postfix 
+     systemctl enable --now dovecot
+     systemctl enable --now cockpit.socket
+     systemctl enable --now pdns-recursor
+     systemctl enable --now pdns
+	 systemctl enable --now php:remi-7.4
+	 systemctl enable --now mysqld
+	 systemctl enable --now httpd
+	 systemctl enable --now php-fpm.service
+	 # OS configuration block
+     hostnamectl set-hostname allinone-by.localhost
 	 
 	 #Installation of Roundcube Webmail
-	 dnf install -y https://rpms.remirepo.net/enterprise/remi-release-8.rpm
-	 dnf install -y php-ldap php-imagick php-common php-gd php-imap php-json php-curl php-zip php-xml php-mbstring php-bz2 php-intl php-gmp
-	 dnf module reset php
-	 dnf module enable php:remi-7.4 -y
+	 # Installing Apache
+	 yum -y install httpd 
+	 # Installing mysql and mysql server
+	 yum -y install mysql-server mysql
+	 # Install PHP
+	 yum -y install php-fpm.x86_64 
+	 # Installing package repository
+	 dnf -y install  https://rpms.remirepo.net/enterprise/remi-release-8.rpm
+	 # Install PHP modules required or recommended by Roundcube.
+	 dnf -y install  php-ldap php-imagick php-common php-gd php-imap php-json php-curl php-zip php-xml php-mbstring php-bz2 php-intl php-gmp
+	 #Creation /var/www
+	 mkdir -p /var/www
+	 # Mysql Sserver set up
+	 mysql -u root -p roundcube < /var/www/roundcube/SQL/mysql.initial.sql
+	 # Downloading RoundCube
+     wget https://github.com/roundcube/roundcubemail/releases/download/1.4.2/roundcubemail-1.4.2-complete.tar.gz
+     # Extracting RoundCube to /var/www
+     tar -xf roundcubemail-1.4.2-complete.tar.gz -C /var/www
+     # Renaming RoundCube Directory
+     mv /var/www/roundcubemail-1.4.2 /var/www/roundcube
+	 # Reset PHP module streams.
+     dnf -y module reset php
+	 # Enable the php:remi-7.4 module stream.
+     dnf -y module enable php:remi-7.4
 	 
-     # OS configuration block
-     hostnamectl set-hostname allinone-by.localhost
+    # Create a MySQL Database and User for Roundcube
+     systemctl start mysqld
+     mysql -u root --execute="CREATE DATABASE roundcube DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;"
+     mysql -u root --execute="CREATE USER roundcubeuser@localhost IDENTIFIED BY 'password';"
+     mysql -u root --execute="GRANT ALL PRIVILEGES ON roundcube.* TO roundcubeuser@localhost;"
+     mysql -u root --execute="flush privileges;"
+     mysql -u root roundcube < /var/www/roundcube/SQL/mysql.initial.sql
+	 
+	 # Create Apache Virtual Host Config File for Roundcube
+     cat > /etc/httpd/conf.d/roundcube.conf << EOF
+<VirtualHost *:80>
+  ServerName 127.0.0.1
+  DocumentRoot /var/www/roundcube/
+  ErrorLog /var/log/httpd/roundcube_error.log
+  CustomLog /var/log/httpd/roundcube_access.log combined
+  <Directory />
+    Options FollowSymLinks
+    AllowOverride All
+  </Directory>
+  <Directory /var/www/roundcube/>
+    Options FollowSymLinks MultiViews
+    AllowOverride All
+    Order allow,deny
+    allow from all
+  </Directory>
+</VirtualHost>
      
+	 
+	 <?php
+/* Local configuration for Roundcube Webmail */
+// ----------------------------------
+// SQL DATABASE
+// ----------------------------------
+// Database connection string (DSN) for read+write operations
+// Format (compatible with PEAR MDB2): db_provider://user:password@host/database
+// Currently supported db_providers: mysql, pgsql, sqlite, mssql, sqlsrv, oracle
+// For examples see http://pear.php.net/manual/en/package.database.mdb2.intro-dsn.php
+// Note: for SQLite use absolute path (Linux): 'sqlite:////full/path/to/sqlite.db?mode=0646'
+//       or (Windows): 'sqlite:///C:/full/path/to/sqlite.db'
+// Note: Various drivers support various additional arguments for connection,
+//       for Mysql: key, cipher, cert, capath, ca, verify_server_cert,
+//       for Postgres: application_name, sslmode, sslcert, sslkey, sslrootcert, sslcrl, sslcompression, service.
+//       e.g. 'mysql://roundcube:@localhost/roundcubemail?verify_server_cert=false'
+\\$config['db_dsnw'] = 'mysql://roundcubeuser:password@localhost/roundcube';
+// ----------------------------------
+// IMAP
+// ----------------------------------
+// The IMAP host chosen to perform the log-in.
+// Leave blank to show a textbox at login, give a list of hosts
+// to display a pulldown menu or set one host as string.
+// Enter hostname with prefix ssl:// to use Implicit TLS, or use
+// prefix tls:// to use STARTTLS.
+// Supported replacement variables:
+// %n - hostname ($_SERVER['SERVER_NAME'])
+// %t - hostname without the first part
+// %d - domain (http hostname $_SERVER['HTTP_HOST'] without the first part)
+// %s - domain name after the '@' from e-mail address provided at login screen
+// For example %n = mail.domain.tld, %t = domain.tld
+// WARNING: After hostname change update of mail_host column in users table is
+//          required to match old user data records with the new host.
+\\$config['default_host'] = 'localhost';
+// SMTP port. Use 25 for cleartext, 465 for Implicit TLS, or 587 for STARTTLS (default)
+\\$config['smtp_port'] = 25;
+// provide an URL where a user can get support for this Roundcube installation
+// PLEASE DO NOT LINK TO THE ROUNDCUBE.NET WEBSITE HERE!
+\\$config['support_url'] = '';
+// This key is used for encrypting purposes, like storing of imap password
+// in the session. For historical reasons it's called DES_key, but it's used
+// with any configured cipher_method (see below).
+\\$config['des_key'] = 'bmvFmezqIpUEbO4NOGnyVC08';
+// Name your service. This is displayed on the login screen and in the window title
+\\$config['product_name'] = 'Roundcube MH';
+// ----------------------------------
+// PLUGINS
+// ----------------------------------
+// List of active plugins (in plugins/ directory)
+\\$config['plugins'] = array();
+\\$config['enable_installer'] = true;
+?>
+EOF
+
      #Service configuration block
      systemctl enable --now cockpit.socket
      systemctl enable --now saslauthd.service
@@ -111,13 +223,85 @@ Vagrant.configure("2") do |config|
      useradd contractor
      usermod -p '$6$xyz$tlQI91A01E6TWfFL6jqBSSLdzLKJtFyF2aWfdTZyOBUn56UjQbMyecGla5IMGqX./neusxkBsr3IwUGZhTnel0' contractor
      
-	 # Mysql Sserver set up
-	 mysql -u root -p roundcube < /var/www/roundcube/SQL/mysql.initial.sql
 	 
-	 # Setting Up Permissions
+	SHELL
+   config.vm.provision "email service config", type: "shell", inline: <<-SHELL
+	   chmod 0600 /var/mail/*
+     # Setting up inet_interfaces to all(listening all addresses)
+     sed -i 's/^\(inet_interfaces\s*=\s*\).*$/\1all/' /etc/postfix/main.cf
+     # Enabling sasl authentication
+     sed -i "\$a# Custom added options\nsmtpd_sasl_auth_enable = yes" /etc/postfix/main.cf
+     # Setting up mbox path
+     sed -i "/mail_location\ =\ mbox:~\/mail:INBOX=\/var\/mail\/%u/s/^#//" /etc/dovecot/conf.d/10-mail.conf
+     # Removing manager from alias list
+     sed -i '/^manager/d' /etc/aliases && newaliases
+  SHELL
+   config.vm.provision "pdns server config", type: "shell", inline: <<-SHELL
+     # Uncomment local-port at pdns config file and changing port value to 54
+     sed -i '/local-port=/s/^# //' /etc/pdns/pdns.conf
+     sed -i 's/^\(local-port\s*=\s*\).*$/\154/' /etc/pdns/pdns.conf
+	 
+     # Creating directory for zone file and copying it to his directory
+     mkdir -p /var/lib/pdns
+	 cp /vagrant/config_files/youdidnotevenimaginethisdomainexists.com.db /var/lib/pdns
+	 
+	 EOF
+     # PHP-MySQL extension
+     yum -y install php-mysql
+     # SE Linux permission configuration
+     chcon -t httpd_sys_content_t /var/www/roundcube/ -R
+     chcon -t httpd_sys_rw_content_t /var/www/roundcube/temp/ /var/www/roundcube/logs/ -R
+     setfacl -R -m u:apache:rwx /var/www/roundcube/temp/ /var/www/roundcube/logs/
+     setsebool -P httpd_can_network_connect 1
+     
+     
+     cat > /var/www/roundcube/config/config.inc.php << EOF
+     # Add zone file for domain
+     cat > /var/lib/pdns/youdidnotevenimaginethisdomainexists.com.db << EOF
+\\$ORIGIN youdidnotevenimaginethisdomainexists.com.
+@                      3600 SOA   ns1.allinone-mh.localhost. (
+                              postmaster.allinone-mh.localhost.     ; address of responsible party
+                              2016072701                 ; serial number
+                              3600                       ; refresh period
+                              600                        ; retry period
+                              604800                     ; expire time
+                              1800                     ) ; minimum ttl
+                      86400 NS    ns1.p30.dynect.net.
+                      86400 NS    ns2.p30.dynect.net.
+                      86400 NS    ns3.p30.dynect.net.
+                      86400 NS    ns4.p30.dynect.net.
+                       3600 MX    10 mx1.allinone-mh.localhost.
+                       3600 MX    20 mx2.allinone-mh.localhost.
+                       3600 MX    30 mx3.allinone-mh.localhost.
+                         60 A     10.0.2.15
+EOF
+     # Creating custom named config and adding path to him to recursor.conf
+     cat > /etc/pdns/named.conf << EOF
+zone "youdidnotevenimaginethisdomainexists.com" {
+  file "/var/lib/pdns/youdidnotevenimaginethisdomainexists.com.db";
+  type master;
+};
+EOF
+    systemctl restart pdns
+  SHELL
+   # Moving sed commands into separate shell provisioner
+   config.vm.provision "pdns recursor config",type: "shell", inline: <<-SHELL
+     # Uncomment local-port at pdns-recursor config file
+	 cp /vagrant/config_files/named.conf /etc/pdns
+     sed -i '/local-port=/s/^# //' /etc/pdns-recursor/recursor.conf
+     sed -i \"\\$abind-config=/etc/pdns/named.conf\" /etc/pdns/pdns.conf
+	 
+     # Configuring forward-zones
+     sed -i '/forward-zones=/s/^# //' /etc/pdns-recursor/recursor.conf
+     sed -i 's/^\\(forward-zones\s*=\s*\\).*$/\\1youdidnotevenimaginethisdomainexists.com=127.0.0.1:54/' /etc/pdns-recursor/recursor.conf
+    systemctl restart pdns-recursor
+	
+	 # Setting up Timezone for PHP
+     sed -i '/date.timezone =/s/^;//' /etc/php.ini
+     sed -i "s/^\(date.timezone\s*=\s*\).*$/\1 'UTC'/" /etc/php.ini
+  SHELL
 	 
 	 
-   SHELL
    config.vm.provision "shell", path: "configure_mail_server.sh"
    config.vm.provision "shell", inline: <<-SHELL
     chmod 0600 /var/mail/*
