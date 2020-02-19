@@ -128,6 +128,10 @@ Vagrant.configure("2") do |config|
      dnf -y module reset php
 	 # Enable the php:remi-7.4 module stream.
      dnf -y module enable php:remi-7.4
+	 #Puppet Repolist ContOS8 installation
+	 dnf install https://yum.puppetlabs.com/puppet-release-el-8.noarch.rpm
+	 #Puppet installation
+	 sudo yum install puppet
 	 
     # Create a MySQL Database and User for Roundcube
      systemctl start mysqld
@@ -213,7 +217,13 @@ EOF
      #Service configuration block
      systemctl enable --now cockpit.socket
      systemctl enable --now saslauthd.service
-
+	 
+	 #Puppet Manifests
+	 mkdir /home/vagrant/puppet_manifest
+     cat > /home/vagrant/puppet_manifest init.pp << EOF
+     
+EOF
+	 
 
      # User configuration block
      useradd engineer 
