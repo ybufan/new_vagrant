@@ -91,9 +91,7 @@ Vagrant.configure("2") do |config|
      pdns pdns-recursor \
      bind-utils \
      puppet \
-   	 # Installing Apache
   	 httpd  \
-  	 # Installing mysql and mysql server
   	 mysql-server mysql
   	 # Reset PHP module streams.
      dnf -y module reset php
@@ -107,8 +105,8 @@ Vagrant.configure("2") do |config|
      systemctl enable --now postfix 
      systemctl enable --now dovecot
      systemctl enable --now cockpit.socket
-     systemctl enable --now pdns-recursor
-     systemctl enable --now pdns
+     systemctl enable pdns-recursor
+     systemctl enable pdns
   	 systemctl enable --now mysqld
   	 systemctl enable --now httpd
   	 systemctl enable --now php-fpm.service
@@ -124,8 +122,6 @@ Vagrant.configure("2") do |config|
 	 #Installation of Roundcube Webmail
 	 #Creation /var/www
 	 mkdir -p /var/www
-	 # Mysql Sserver set up
-	 mysql -u root -p roundcube < /var/www/roundcube/SQL/mysql.initial.sql
 	 # Downloading RoundCube
      wget https://github.com/roundcube/roundcubemail/releases/download/1.4.2/roundcubemail-1.4.2-complete.tar.gz
      # Extracting RoundCube to /var/www
@@ -228,7 +224,7 @@ EOF
 
    config.vm.provision "Puppet manifests for future", type: "shell", inline: <<-SHELL
 	 #Puppet Manifests
-	 mkdir /home/vagrant/puppet_manifest
+	 mkdir -p /home/vagrant/puppet_manifest
      cat > /home/vagrant/puppet_manifest init.pp << EOF
      
 EOF
