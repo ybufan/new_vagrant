@@ -83,58 +83,53 @@ Vagrant.configure("2") do |config|
   # Enable provisioning with a shell script. Additional provisioners such as
   # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
   # documentation for more information about their specific syntax and use.
-   config.vm.provision "shell", inline: <<-SHELL
-      Installation block
-     yum -y install epel-release
-     yum -y install vim cockpit bash-completion postfix dovecot telnet nc
-     yum -y install cyrus-sasl cyrus-sasl-plain
-     yum -y install pdns pdns-recursor
-     yum -y install bind-utils
-  	 # Service configuration block
+   config.vm.provision "Package Installation", type: "shell", inline: <<-SHELL
+     #Installation block
+     yum -y install epel-release https://rpms.remirepo.net/enterprise/remi-release-8.rpm https://yum.puppetlabs.com/puppet-release-el-8.noarch.rpm
+     yum -y install vim cockpit bash-completion postfix dovecot telnet nc \
+     cyrus-sasl cyrus-sasl-plain \
+     pdns pdns-recursor \
+     bind-utils \
+     puppet \
+  	 httpd  \
+  	 mysql-server mysql
+  	 # Reset PHP module streams.
+     dnf -y module reset php
+  	 # Enable the php:remi-7.4 module stream.
+     dnf -y module enable php:remi-7.4
+  	 # Install PHP modules required or recommended by Roundcube.
+  	 yum -y install php-fpm.x86_64 php-ldap php-imagick php-common php-gd php-imap php-json php-curl php-zip php-xml php-mbstring php-bz2 php-intl php-gmp php-mysql
+   SHELL
+   config.vm.provision "Bulk service enablement", type: "shell", inline: <<-SHELL
+ 	   # Service configuration block
      systemctl enable --now postfix 
      systemctl enable --now dovecot
      systemctl enable --now cockpit.socket
-     systemctl enable --now pdns-recursor
-     systemctl enable --now pdns
-	 systemctl enable --now php:remi-7.4
-	 systemctl enable --now mysqld
-	 systemctl enable --now httpd
-	 systemctl enable --now php-fpm.service
+     systemctl enable pdns-recursor
+     systemctl enable pdns
+  	 systemctl enable --now mysqld
+  	 systemctl enable --now httpd
+  	 systemctl enable --now php-fpm.service
+     systemctl enable --now saslauthd.service
+   SHELL
+ 
+   config.vm.provision "Hostname selection", type: "shell", inline: <<-SHELL
 	 # OS configuration block
      hostnamectl set-hostname allinone-by.localhost
+   SHELL
 	 
+   config.vm.provision "RoundCube Installation and Configuration", type: "shell", inline: <<-SHELL
 	 #Installation of Roundcube Webmail
-	 # Installing Apache
-	 yum -y install httpd 
-	 # Installing mysql and mysql server
-	 yum -y install mysql-server mysql
-	 # Install PHP
-	 yum -y install php-fpm.x86_64 
-	 # Installing package repository
-	 dnf -y install  https://rpms.remirepo.net/enterprise/remi-release-8.rpm
-	 # Install PHP modules required or recommended by Roundcube.
-	 dnf -y install  php-ldap php-imagick php-common php-gd php-imap php-json php-curl php-zip php-xml php-mbstring php-bz2 php-intl php-gmp
 	 #Creation /var/www
 	 mkdir -p /var/www
-	 # Mysql Sserver set up
-	 mysql -u root -p roundcube < /var/www/roundcube/SQL/mysql.initial.sql
 	 # Downloading RoundCube
      wget https://github.com/roundcube/roundcubemail/releases/download/1.4.2/roundcubemail-1.4.2-complete.tar.gz
      # Extracting RoundCube to /var/www
      tar -xf roundcubemail-1.4.2-complete.tar.gz -C /var/www
      # Renaming RoundCube Directory
      mv /var/www/roundcubemail-1.4.2 /var/www/roundcube
-	 # Reset PHP module streams.
-     dnf -y module reset php
-	 # Enable the php:remi-7.4 module stream.
-     dnf -y module enable php:remi-7.4
-	 #Puppet Repolist ContOS8 installation
-	 dnf install https://yum.puppetlabs.com/puppet-release-el-8.noarch.rpm
-	 #Puppet installation
-	 sudo yum install puppet
 	 
     # Create a MySQL Database and User for Roundcube
-     systemctl start mysqld
      mysql -u root --execute="CREATE DATABASE roundcube DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;"
      mysql -u root --execute="CREATE USER roundcubeuser@localhost IDENTIFIED BY 'password';"
      mysql -u root --execute="GRANT ALL PRIVILEGES ON roundcube.* TO roundcubeuser@localhost;"
@@ -159,9 +154,10 @@ Vagrant.configure("2") do |config|
     allow from all
   </Directory>
 </VirtualHost>
-     
-	 
-	 <?php
+EOF
+
+  cat > /var/www/roundcube/config/config.inc.php << EOF
+<?php
 /* Local configuration for Roundcube Webmail */
 // ----------------------------------
 // SQL DATABASE
@@ -213,18 +209,28 @@ Vagrant.configure("2") do |config|
 \\$config['enable_installer'] = true;
 ?>
 EOF
+     # SE Linux permission configuration
+     chcon -t httpd_sys_content_t /var/www/roundcube/ -R
+     chcon -t httpd_sys_rw_content_t /var/www/roundcube/temp/ /var/www/roundcube/logs/ -R
+     setfacl -R -m u:apache:rwx /var/www/roundcube/temp/ /var/www/roundcube/logs/
+     setsebool -P httpd_can_network_connect 1
 
-     #Service configuration block
-     systemctl enable --now cockpit.socket
-     systemctl enable --now saslauthd.service
-	 
+	
+	 # Setting up Timezone for PHP
+     sed -i '/date.timezone =/s/^;//' /etc/php.ini
+     sed -i "s/^\(date.timezone\s*=\s*\).*$/\1 'UTC'/" /etc/php.ini
+
+  SHELL
+
+   config.vm.provision "Puppet manifests for future", type: "shell", inline: <<-SHELL
 	 #Puppet Manifests
-	 mkdir /home/vagrant/puppet_manifest
+	 mkdir -p /home/vagrant/puppet_manifest
      cat > /home/vagrant/puppet_manifest init.pp << EOF
      
 EOF
+  SHELL
 	 
-
+   config.vm.provision "user config", type: "shell", inline: <<-SHELL
      # User configuration block
      useradd engineer 
      usermod -p '$6$xyz$.UccqMWqX8VK4PRzmKTR1woU2y5IgDas9n.XPkhgK8M62yVqI4sLx.Yw2AC5z7t4Ke3NiU7aq7i3Su5QdrRcF1' engineer
@@ -232,9 +238,8 @@ EOF
      usermod -p '$6$xyz$PcPt/h72LIQm.YoxBmDLqfpbX1w3vhcJ1LwyYjOaslRr67l0g3ZkE5nKN0c4Ed98wYTvMWvhlGcV7NZorCE2i/' manager
      useradd contractor
      usermod -p '$6$xyz$tlQI91A01E6TWfFL6jqBSSLdzLKJtFyF2aWfdTZyOBUn56UjQbMyecGla5IMGqX./neusxkBsr3IwUGZhTnel0' contractor
-     
-	 
 	SHELL
+
    config.vm.provision "email service config", type: "shell", inline: <<-SHELL
 	   chmod 0600 /var/mail/*
      # Setting up inet_interfaces to all(listening all addresses)
@@ -245,7 +250,10 @@ EOF
      sed -i "/mail_location\ =\ mbox:~\/mail:INBOX=\/var\/mail\/%u/s/^#//" /etc/dovecot/conf.d/10-mail.conf
      # Removing manager from alias list
      sed -i '/^manager/d' /etc/aliases && newaliases
+     systemctl restart postfix
+     systemctl restart dovecot
   SHELL
+
    config.vm.provision "pdns server config", type: "shell", inline: <<-SHELL
      # Uncomment local-port at pdns config file and changing port value to 54
      sed -i '/local-port=/s/^# //' /etc/pdns/pdns.conf
@@ -253,19 +261,9 @@ EOF
 	 
      # Creating directory for zone file and copying it to his directory
      mkdir -p /var/lib/pdns
-	 cp /vagrant/config_files/youdidnotevenimaginethisdomainexists.com.db /var/lib/pdns
+	   cp /vagrant/config_files/youdidnotevenimaginethisdomainexists.com.db /var/lib/pdns
 	 
-	 EOF
-     # PHP-MySQL extension
-     yum -y install php-mysql
-     # SE Linux permission configuration
-     chcon -t httpd_sys_content_t /var/www/roundcube/ -R
-     chcon -t httpd_sys_rw_content_t /var/www/roundcube/temp/ /var/www/roundcube/logs/ -R
-     setfacl -R -m u:apache:rwx /var/www/roundcube/temp/ /var/www/roundcube/logs/
-     setsebool -P httpd_can_network_connect 1
-     
-     
-     cat > /var/www/roundcube/config/config.inc.php << EOF
+     #cat > /var/www/roundcube/config/config.inc.php << EOF
      # Add zone file for domain
      cat > /var/lib/pdns/youdidnotevenimaginethisdomainexists.com.db << EOF
 \\$ORIGIN youdidnotevenimaginethisdomainexists.com.
@@ -294,34 +292,22 @@ zone "youdidnotevenimaginethisdomainexists.com" {
 EOF
     systemctl restart pdns
   SHELL
+
    # Moving sed commands into separate shell provisioner
    config.vm.provision "pdns recursor config",type: "shell", inline: <<-SHELL
      # Uncomment local-port at pdns-recursor config file
 	 cp /vagrant/config_files/named.conf /etc/pdns
      sed -i '/local-port=/s/^# //' /etc/pdns-recursor/recursor.conf
      sed -i \"\\$abind-config=/etc/pdns/named.conf\" /etc/pdns/pdns.conf
-	 
      # Configuring forward-zones
      sed -i '/forward-zones=/s/^# //' /etc/pdns-recursor/recursor.conf
      sed -i 's/^\\(forward-zones\s*=\s*\\).*$/\\1youdidnotevenimaginethisdomainexists.com=127.0.0.1:54/' /etc/pdns-recursor/recursor.conf
     systemctl restart pdns-recursor
-	
-	 # Setting up Timezone for PHP
-     sed -i '/date.timezone =/s/^;//' /etc/php.ini
-     sed -i "s/^\(date.timezone\s*=\s*\).*$/\1 'UTC'/" /etc/php.ini
   SHELL
 	 
 	 
-   config.vm.provision "shell", path: "configure_mail_server.sh"
-   config.vm.provision "shell", inline: <<-SHELL
-    chmod 0600 /var/mail/*
-    systemctl enable --now postfix 
-    systemctl enable --now dovecot
-    systemctl enable --now pdns-recursor
-    systemctl enable --now pdns
-	systemctl enable --now php:remi-7.4
-	systemctl enable --now mysqld
-	systemctl enable --now httpd
-	systemctl enable --now php-fpm.service
-   SHELL
+#   config.vm.provision "shell", path: "configure_mail_server.sh"
+#   config.vm.provision "shell", inline: <<-SHELL
+#     chmod 0600 /var/mail/*
+#   SHELL
 end
